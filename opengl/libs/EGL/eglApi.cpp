@@ -462,8 +462,7 @@ EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
         // modify the EGLconfig's format before setting the native window's
         // format.
 
-        // by default, just pick RGBA_8888
-        EGLint format = HAL_PIXEL_FORMAT_RGBA_8888;
+        EGLint format;
         android_dataspace dataSpace = HAL_DATASPACE_UNKNOWN;
 
 #if WORKAROUND_BUG_10194508
@@ -478,7 +477,12 @@ EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
         cnx->egl.eglGetConfigAttrib(iDpy, config, EGL_ALPHA_SIZE, &a);
         if (a > 0) {
             // alpha-channel requested, there's really only one suitable format
-            format = HAL_PIXEL_FORMAT_RGBA_8888;
+            if (!cnx->egl.eglGetConfigAttrib(iDpy, config, EGL_NATIVE_VISUAL_ID,
+                    &format)) {
+                ALOGE("eglGetConfigAttrib(EGL_NATIVE_VISUAL_ID) failed: %#x",
+                        eglGetError());
+                format = HAL_PIXEL_FORMAT_RGBA_8888;
+            }
         } else {
             EGLint r, g, b;
             r = g = b = 0;
