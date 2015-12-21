@@ -86,7 +86,12 @@ checkGlesEmulationStatus(void)
     char  prop[PROPERTY_VALUE_MAX];
     int   result = -1;
 
-    /* First, check for qemu=1 */
+    /* Check first if the device does not support hardware rendering */
+    property_get("ro.softwaregl",prop,"0");
+    if(atoi(prop) == 1)
+        return 0;
+
+    /* Then, check for qemu=1 */
     property_get("ro.kernel.qemu",prop,"0");
     if (atoi(prop) != 1)
         return -1;
