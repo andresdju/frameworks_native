@@ -87,7 +87,7 @@ checkGlesEmulationStatus(void)
     int   result = -1;
 
     /* Check first if the device does not support hardware rendering */
-    property_get("ro.softwaregl",prop,"0");
+    property_get("ro.libagl",prop,"0");
     if(atoi(prop) == 1)
         return 0;
 
