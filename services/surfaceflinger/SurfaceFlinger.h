@@ -146,6 +146,9 @@ private:
     friend class DisplayEventConnection;
     friend class Layer;
     friend class LayerDim;
+#ifdef QTI_BSP
+    friend class ExLayer;
+#endif
     friend class MonitoredProducer;
     friend class LayerBlur;
 
@@ -552,6 +555,9 @@ private:
 
     mat4 mColorMatrix;
     bool mHasColorMatrix;
+
+    mat4 mSecondaryColorMatrix;
+    bool mHasSecondaryColorMatrix;
 
     // Static screen stats
     bool mHasPoweredOff;

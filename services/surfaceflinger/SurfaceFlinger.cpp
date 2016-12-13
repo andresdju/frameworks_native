@@ -74,6 +74,7 @@
 
 #include "DisplayHardware/FramebufferSurface.h"
 #include "DisplayHardware/HWComposer.h"
+#include "ExSurfaceFlinger/ExHWComposer.h"
 #include "DisplayHardware/VirtualDisplaySurface.h"
 
 #include "Effects/Daltonizer.h"
@@ -81,6 +82,10 @@
 #include "RenderEngine/RenderEngine.h"
 #include <cutils/compiler.h>
 #include "DisplayUtils.h"
+
+#ifdef USES_HWC_SERVICES
+#include "ExynosHWCService.h"
+#endif
 
 #define DISPLAY_COUNT       1
 
@@ -130,6 +135,10 @@ static sp<Layer> lastSurfaceViewLayer;
 
 // ---------------------------------------------------------------------------
 
+#ifdef USES_HWC_SERVICES
+static bool notifyPSRExit = true;
+#endif
+
 SurfaceFlinger::SurfaceFlinger()
     :   BnSurfaceComposer(),
         mTransactionFlags(0),
@@ -156,6 +165,7 @@ SurfaceFlinger::SurfaceFlinger()
         mHWVsyncAvailable(false),
         mDaltonize(false),
         mHasColorMatrix(false),
+        mHasSecondaryColorMatrix(false),
         mHasPoweredOff(false),
         mFrameBuckets(),
         mTotalTime(0),
@@ -311,6 +321,14 @@ void SurfaceFlinger::bootFinished()
     // formerly we would just kill the process, but we now ask it to exit so it
     // can choose where to stop the animation.
     property_set("service.bootanim.exit", "1");
+
+#ifdef USES_HWC_SERVICES
+    sp<IServiceManager> sm = defaultServiceManager();
+    sp<android::IExynosHWCService> hwc =
+        interface_cast<android::IExynosHWCService>(sm->getService(String16("Exynos.HWCService")));
+    ALOGD("boot finished. Inform HWC");
+    hwc->setBootFinished();
+#endif
 }
 
 void SurfaceFlinger::deleteTextureAsync(uint32_t texture) {
@@ -797,6 +815,19 @@ void SurfaceFlinger::signalTransaction() {
 }
 
 void SurfaceFlinger::signalLayerUpdate() {
+#ifdef USES_HWC_SERVICES
+    if (notifyPSRExit) {
+        notifyPSRExit = false;
+        sp<IServiceManager> sm = defaultServiceManager();
+        sp<IExynosHWCService> hwcService =
+            interface_cast<android::IExynosHWCService>(
+                sm->getService(String16("Exynos.HWCService")));
+        if (hwcService != NULL)
+            hwcService->notifyPSRExit();
+        else
+            ALOGE("HWCService::notifyPSRExit failed");
+    }
+#endif
     mEventQueue.invalidate();
 }
 
@@ -981,6 +1012,9 @@ void SurfaceFlinger::handleMessageRefresh() {
         doDebugFlashRegions();
         doComposition();
         postComposition();
+#ifdef USES_HWC_SERVICES
+        notifyPSRExit = true;
+#endif
     }
 
     previousExpectedPresent = mPrimaryDispSync.computeNextRefresh(0);
@@ -1193,7 +1227,7 @@ void SurfaceFlinger::setUpHWComposer() {
                         for (size_t i=0 ; cur!=end && i<count ; ++i, ++cur) {
                             const sp<Layer>& layer(currentLayers[i]);
                             layer->setGeometry(hw, *cur);
-                            if (mDebugDisableHWC || mDebugRegion || mDaltonize || mHasColorMatrix) {
+                            if (mDebugDisableHWC || mDebugRegion || mDaltonize || mHasColorMatrix || mHasSecondaryColorMatrix) {
                                 cur->setSkip(true);
                             }
                         }
@@ -1958,11 +1992,14 @@ void SurfaceFlinger::doDisplayComposition(const sp<const DisplayDevice>& hw,
         }
     }
 
-    if (CC_LIKELY(!mDaltonize && !mHasColorMatrix)) {
+    if (CC_LIKELY(!mDaltonize && !mHasColorMatrix && !mHasSecondaryColorMatrix)) {
         if (!doComposeSurfaces(hw, dirtyRegion)) return;
     } else {
         RenderEngine& engine(getRenderEngine());
         mat4 colorMatrix = mColorMatrix;
+        if (mHasSecondaryColorMatrix) {
+            colorMatrix = mHasColorMatrix ? (colorMatrix * mSecondaryColorMatrix) : mSecondaryColorMatrix;
+        }
         if (mDaltonize) {
             colorMatrix = colorMatrix * mDaltonizer();
         }
@@ -1999,7 +2036,12 @@ bool SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& hw, const 
         }
 
         // Never touch the framebuffer if we don't have any framebuffer layers
+#if defined(QTI_BSP) && defined(SDM_TARGET)
+        const bool hasHwcComposition = hwc.hasHwcComposition(id) |
+            (reinterpret_cast<ExHWComposer*>(&hwc))->getS3DFlag(id);
+#else
         const bool hasHwcComposition = hwc.hasHwcComposition(id);
+#endif
         if (hasHwcComposition) {
             // when using overlays, we assume a fully transparent framebuffer
             // NOTE: we could reduce how much we need to clear, for instance
@@ -2948,7 +2990,8 @@ void SurfaceFlinger::dumpAllLocked(const Vector<String16>& args, size_t& index,
     result.appendFormat("  h/w composer %s and %s\n",
             hwc.initCheck()==NO_ERROR ? "present" : "not present",
                     (mDebugDisableHWC || mDebugRegion || mDaltonize
-                            || mHasColorMatrix) ? "disabled" : "enabled");
+                            || mHasColorMatrix
+                            || mHasSecondaryColorMatrix) ? "disabled" : "enabled");
     hwc.dump(result);
 
     /*
@@ -3158,6 +3201,28 @@ status_t SurfaceFlinger::onTransact(
                     mSFEventThread->setPhaseOffset(static_cast<nsecs_t>(n));
                 return NO_ERROR;
             }
+            case 1030: {
+                // apply a secondary color matrix
+                // this will be combined with any other transformations
+                n = data.readInt32();
+                mHasSecondaryColorMatrix = n ? 1 : 0;
+                if (n) {
+                    // color matrix is sent as mat3 matrix followed by vec3
+                    // offset, then packed into a mat4 where the last row is
+                    // the offset and extra values are 0
+                    for (size_t i = 0 ; i < 4; i++) {
+                      for (size_t j = 0; j < 4; j++) {
+                          mSecondaryColorMatrix[i][j] = data.readFloat();
+                      }
+                    }
+                } else {
+                    mSecondaryColorMatrix = mat4();
+                }
+                invalidateHwcGeometry();
+                repaintEverything();
+                return NO_ERROR;
+            }
+
         }
     }
     return err;
@@ -3436,10 +3501,9 @@ void SurfaceFlinger::renderScreenImplLocked(
     // make sure to clear all GL error flags
     engine.checkErrors();
 
-    if (DisplayDevice::DISPLAY_PRIMARY == hw->getDisplayType() &&
-                hw->isPanelInverseMounted()) {
+    if (DisplayDevice::DISPLAY_PRIMARY == hw->getDisplayType()) {
         rotation = (Transform::orientation_flags)
-                (rotation ^ Transform::ROT_180);
+                (rotation ^ hw->getPanelMountFlip());
     }
 
     // set-up our viewport
