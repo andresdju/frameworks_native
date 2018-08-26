@@ -125,14 +125,11 @@ static char const * getProcessCmdline() {
  * Used when running multiple (usually software) renderers on a single device.
  * Requires ro.zygote.disable_gl_preload to be enabled!
  *
- * It looks for these properties in this preferred order:
- *   persist.egl._uid_<application UID>
- *   persist.egl.<application name> (limited to 31 characters in length)
+ * It looks for libraries in the filesystem in this preferred order:
+ *   /data/data/<application name>/os_override/libGLES_impl.so
+ *   /system/etc/os_override/<application name>/libGLES_impl.so
  *
- * The UID is prefered since it works with multiple users or long names.
- * Using the application name is useful for shipping pre-configured setups.
- *
- * The property value can either be a search path or a single GLES library.
+ * Usually, libGLES.so would be a symlink to a GLES implementation.
  *
  * MatchFile::find() does the heavy lifting of using the value.
  * As of writing it searches for the value '/system/lib/libGLES_mesa.so'
@@ -149,26 +146,32 @@ static char* getOverridePath(void) {
     // otherwise overrides only happen once, to zygote
     if (!property_get_bool("ro.zygote.disable_gl_preload", 0)) {
             ALOGD("ro.zygote.disable_gl_preload not set,"
-                  " persist.egl.* overrides disabled");
+                  " EGL overrides disabled");
             return 0;
     }
 
-    static char prop[PROPERTY_VALUE_MAX];
-    String8 prop_prefix("persist.egl.");
-    String8 prop_uid(prop_prefix);
-    String8 prop_name(prop_prefix);
-    prop_uid.appendFormat("_uid_%i", getuid());
-    prop_name.appendFormat("%s", getProcessCmdline());
-    char* prop_name_trunc = prop_name.lockBuffer(PROPERTY_KEY_MAX);
-    prop_name_trunc[PROPERTY_KEY_MAX - 1] = '\0';
+    String8 data_override_path("/data/data/");
+    data_override_path.appendFormat("%s", getProcessCmdline());
+    data_override_path.appendFormat("%s", "/os_override/libGLES_impl.so");
 
-    ALOGD("checking %s then %s for overrides...",
-        prop_uid.string(), prop_name_trunc);
+    ALOGD("checking %s for override...",
+        data_override_path.string());
 
-    if (property_get(prop_uid.string(),prop,NULL) ||
-          property_get(prop_name_trunc,prop,NULL)) {
-        ALOGD("override found: %s", prop);
-        return prop;
+    if (access( data_override_path.string(), R_OK ) ) {
+        ALOGD("override found: %s", data_override_path.string());
+	return data_override_path.string();
+    }
+
+    String8 system_override_path("/system/etc/os_override/");
+    system_override_path.appendFormat("%s", getProcessCmdline());
+    system_override_path.appendFormat("%s", "/libGLES_impl.so");
+
+    ALOGD("checking %s for override...",
+        system_override_path.string());
+
+    if (access( system_override_path.string(), R_OK ) ) {
+        ALOGD("override found: %s", system_override_path.string());
+	return system_override_path.string();
     }
 
     ALOGD("no override found");
@@ -340,17 +343,8 @@ void *Loader::load_driver(const char* kind,
             // check for overrides first
             char* overridePath = getOverridePath();
             if (overridePath) {
-               // search the path in case its a directory
-               // this ignores the software renderer
-               if (search_path(kind, overridePath, result)) {
-                    return result;
-               } else if (!access(overridePath, R_OK)) {
-                    // not a directory but accessible so probably a file?
-                    result.setTo(overridePath);
-                    return result;
-               } else {
-                     ALOGD("override not a file or search path, ignoring...");
-               }
+               result.setTo(overridePath);
+               return result;
             }
 
             // in the emulator case, we just return the hardcoded name
