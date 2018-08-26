@@ -121,6 +121,62 @@ static char const * getProcessCmdline() {
 
 // ----------------------------------------------------------------------------
 
+/* Gets a system-defined per-application path to a GLES implementation.
+ * Used when running multiple (usually software) renderers on a single device.
+ * Requires ro.zygote.disable_gl_preload to be enabled!
+ *
+ * It looks for these properties in this preferred order:
+ *   persist.egl._uid_<application UID>
+ *   persist.egl.<application name> (limited to 31 characters in length)
+ *
+ * The UID is prefered since it works with multiple users or long names.
+ * Using the application name is useful for shipping pre-configured setups.
+ *
+ * The property value can either be a search path or a single GLES library.
+ *
+ * MatchFile::find() does the heavy lifting of using the value.
+ * As of writing it searches for the value '/system/lib/libGLES_mesa.so'
+ * in this order:
+ *
+ *   /system/lib/libGLES_mesa.so/lib%s.so
+ *   /system/lib/libGLES_mesa.so/lib%s_*.so
+ *   /system/lib/libGLES_mesa.so
+ *
+ * where %s is determined at runtime to be GLES, EGL, GLESv1_CM, or GLESv2.
+ */
+static char* getOverridePath(void) {
+    // only really useful if ro.zygote.disable_gl_preload is enabled
+    // otherwise overrides only happen once, to zygote
+    if (!property_get_bool("ro.zygote.disable_gl_preload", 0)) {
+            ALOGD("ro.zygote.disable_gl_preload not set,"
+                  " persist.egl.* overrides disabled");
+            return 0;
+    }
+
+    static char prop[PROPERTY_VALUE_MAX];
+    String8 prop_prefix("persist.egl.");
+    String8 prop_uid(prop_prefix);
+    String8 prop_name(prop_prefix);
+    prop_uid.appendFormat("_uid_%i", getuid());
+    prop_name.appendFormat("%s", getProcessCmdline());
+    char* prop_name_trunc = prop_name.lockBuffer(PROPERTY_KEY_MAX);
+    prop_name_trunc[PROPERTY_KEY_MAX - 1] = '\0';
+
+    ALOGD("checking %s then %s for overrides...",
+        prop_uid.string(), prop_name_trunc);
+
+    if (property_get(prop_uid.string(),prop,NULL) ||
+          property_get(prop_name_trunc,prop,NULL)) {
+        ALOGD("override found: %s", prop);
+        return prop;
+    }
+
+    ALOGD("no override found");
+    return 0;
+}
+
+// ----------------------------------------------------------------------------
+
 Loader::driver_t::driver_t(void* gles)
 {
     dso[0] = gles;
@@ -280,50 +336,22 @@ void *Loader::load_driver(const char* kind,
     public:
         static String8 find(const char* kind) {
             String8 result;
-            String8 pattern;
-            pattern.appendFormat("lib%s", kind);
-            const char* const searchPaths[] = {
-#if defined(__LP64__)
-                    "/vendor/lib64/egl",
-                    "/system/lib64/egl"
-#else
-                    "/vendor/lib/egl",
-                    "/system/lib/egl"
-#endif
-            };
 
-            // first, we search for the exact name of the GLES userspace
-            // driver in both locations.
-            // i.e.:
-            //      libGLES.so, or:
-            //      libEGL.so, libGLESv1_CM.so, libGLESv2.so
-
-            for (size_t i=0 ; i<NELEM(searchPaths) ; i++) {
-                if (find(result, pattern, searchPaths[i], true)) {
+            // check for overrides first
+            char* overridePath = getOverridePath();
+            if (overridePath) {
+               // search the path in case its a directory
+               // this ignores the software renderer
+               if (search_path(kind, overridePath, result)) {
                     return result;
-                }
-            }
-
-            // for compatibility with the old "egl.cfg" naming convention
-            // we look for files that match:
-            //      libGLES_*.so, or:
-            //      libEGL_*.so, libGLESv1_CM_*.so, libGLESv2_*.so
-
-            pattern.append("_");
-            for (size_t i=0 ; i<NELEM(searchPaths) ; i++) {
-                if (find(result, pattern, searchPaths[i], false)) {
+               } else if (!access(overridePath, R_OK)) {
+                    // not a directory but accessible so probably a file?
+                    result.setTo(overridePath);
                     return result;
-                }
+               } else {
+                     ALOGD("override not a file or search path, ignoring...");
+               }
             }
-
-            // we didn't find the driver. gah.
-            result.clear();
-            return result;
-        }
-
-    private:
-        static bool find(String8& result,
-                const String8& pattern, const char* const search, bool exact) {
 
             // in the emulator case, we just return the hardcoded name
             // of the software renderer.
@@ -335,8 +363,60 @@ void *Loader::load_driver(const char* kind,
 #else
                 result.setTo("/system/lib/egl/libGLES_android.so");
 #endif
+                return result;
+            }
+
+            const char* const searchPaths[] = {
+#if defined(__LP64__)
+                    "/vendor/lib64/egl",
+                    "/system/lib64/egl"
+#else
+                    "/vendor/lib/egl",
+                    "/system/lib/egl"
+#endif
+            };
+
+            for (size_t i=0 ; i<NELEM(searchPaths) ; i++) {
+                if (search_path(kind, searchPaths[i], result)) {
+                    return result;
+                }
+            }
+
+            // we didn't find the driver. gah.
+            result.clear();
+            return result;
+        }
+
+        static bool search_path(const char* kind, const char* path, String8& result) {
+            String8 pattern;
+
+            // first, we search for the exact name of the GLES userspace
+            // driver in both locations.
+            // i.e.:
+            //      libGLES.so, or:
+            //      libEGL.so, libGLESv1_CM.so, libGLESv2.so
+
+            pattern.appendFormat("lib%s", kind);
+            if (find(result, pattern, path, true)) {
                 return true;
             }
+
+            // for compatibility with the old "egl.cfg" naming convention
+            // we look for files that match:
+            //      libGLES_*.so, or:
+            //      libEGL_*.so, libGLESv1_CM_*.so, libGLESv2_*.so
+
+            pattern.append("_");
+            if (find(result, pattern, path, false)) {
+                return true;
+            }
+
+            return false;
+        }
+
+    private:
+        static bool find(String8& result,
+                const String8& pattern, const char* const search, bool exact) {
 
             if (exact) {
                 String8 absolutePath;
