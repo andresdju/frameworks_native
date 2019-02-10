@@ -141,7 +141,7 @@ static char const * getProcessCmdline() {
  *
  * where %s is determined at runtime to be GLES, EGL, GLESv1_CM, or GLESv2.
  */
-static char* getOverridePath(void) {
+static const char* getOverridePath(void) {
     // only really useful if ro.zygote.disable_gl_preload is enabled
     // otherwise overrides only happen once, to zygote
     if (!property_get_bool("ro.zygote.disable_gl_preload", 0)) {
@@ -341,7 +341,7 @@ void *Loader::load_driver(const char* kind,
             String8 result;
 
             // check for overrides first
-            char* overridePath = getOverridePath();
+            const char* overridePath = getOverridePath();
             if (overridePath) {
                result.setTo(overridePath);
                return result;
