@@ -129,7 +129,7 @@ static char const * getProcessCmdline() {
  *   /data/data/<application name>/os_override/libGLES_impl.so
  *   /system/etc/os_override/<application name>/libGLES_impl.so
  *
- * Usually, libGLES.so would be a symlink to a GLES implementation.
+ * Usually, libGLES_impl.so would be a symlink to a GLES implementation.
  *
  * MatchFile::find() does the heavy lifting of using the value.
  * As of writing it searches for the value '/system/lib/libGLES_mesa.so'
