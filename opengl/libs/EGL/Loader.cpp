@@ -157,7 +157,7 @@ static const char* getOverridePath(void) {
     ALOGD("checking %s for override...",
         data_override_path.string());
 
-    if (access( data_override_path.string(), R_OK ) ) {
+    if (!access( data_override_path.string(), R_OK ) ) {
         ALOGD("override found: %s", data_override_path.string());
 	return data_override_path.string();
     }
@@ -169,7 +169,7 @@ static const char* getOverridePath(void) {
     ALOGD("checking %s for override...",
         system_override_path.string());
 
-    if (access( system_override_path.string(), R_OK ) ) {
+    if (!access( system_override_path.string(), R_OK ) ) {
         ALOGD("override found: %s", system_override_path.string());
 	return system_override_path.string();
     }
