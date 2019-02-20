@@ -22,6 +22,7 @@
 #include <dlfcn.h>
 #include <limits.h>
 #include <dirent.h>
+#include <unistd.h>
 
 #include <cutils/log.h>
 #include <cutils/properties.h>
@@ -142,6 +143,9 @@ static char const * getProcessCmdline() {
  * where %s is determined at runtime to be GLES, EGL, GLESv1_CM, or GLESv2.
  */
 static const char* getOverridePath(void) {
+
+    ALOGD("UID:%d EUID:%d", getuid(), geteuid());
+
     // only really useful if ro.zygote.disable_gl_preload is enabled
     // otherwise overrides only happen once, to zygote
     if (!property_get_bool("ro.zygote.disable_gl_preload", 0)) {
@@ -152,29 +156,40 @@ static const char* getOverridePath(void) {
 
     String8 data_override_path("/data/data/");
     data_override_path.appendFormat("%s", getProcessCmdline());
-    data_override_path.appendFormat("%s", "/os_override/libGLES_impl.so");
+    data_override_path.appendFormat("%s", "/libGLES_mesa");
 
-    ALOGD("checking %s for override...",
-        data_override_path.string());
 
-    if (!access( data_override_path.string(), R_OK ) ) {
+    if (!access( data_override_path.string(), F_OK ) ) {
         ALOGD("override found: %s", data_override_path.string());
-	return data_override_path.string();
+	return "/system/lib/egl/libGLES_mesa.so";
+    }
+    
+    data_override_path.setTo("/data/data/");
+    data_override_path.appendFormat("%s", getProcessCmdline());
+    data_override_path.appendFormat("%s", "/libGLES_android");
+    
+    if (!access( data_override_path.string(), F_OK ) ) {
+        ALOGD("override found: %s", data_override_path.string());
+	return "/system/lib/egl/libGLES_android.so";
     }
 
-    String8 system_override_path("/system/etc/os_override/");
+    String8 system_override_path("/system/etc/libGLES_mesa/");
     system_override_path.appendFormat("%s", getProcessCmdline());
-    system_override_path.appendFormat("%s", "/libGLES_impl.so");
 
-    ALOGD("checking %s for override...",
-        system_override_path.string());
-
-    if (!access( system_override_path.string(), R_OK ) ) {
+    if (!access( system_override_path.string(), F_OK ) ) {
         ALOGD("override found: %s", system_override_path.string());
-	return system_override_path.string();
+	return "/system/lib/egl/libGLES_mesa.so";
     }
 
-    ALOGD("no override found");
+    system_override_path.setTo("/system/etc/libGLES_android/");
+    system_override_path.appendFormat("%s", getProcessCmdline());
+    
+    if (!access( system_override_path.string(), F_OK ) ) {
+        ALOGD("override found: %s", system_override_path.string());
+	return "/system/lib/egl/libGLES_android.so";
+    }
+
+    ALOGD("no EGL override found");
     return 0;
 }
 
