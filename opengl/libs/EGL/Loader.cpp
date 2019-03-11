@@ -144,14 +144,13 @@ static char const * getProcessCmdline() {
  */
 static const char* getOverridePath(void) {
 
-    ALOGD("UID:%d EUID:%d", getuid(), geteuid());
+    ALOGD("UID:%d EUID:%d - %s", getuid(), geteuid(), getProcessCmdline());
 
     // only really useful if ro.zygote.disable_gl_preload is enabled
     // otherwise overrides only happen once, to zygote
     if (!property_get_bool("ro.zygote.disable_gl_preload", 0)) {
             ALOGD("ro.zygote.disable_gl_preload not set,"
-                  " EGL overrides disabled");
-            return 0;
+                  " zygote's libGLES preloaded for every process");
     }
 
     String8 data_override_path("/data/data/");
@@ -189,8 +188,8 @@ static const char* getOverridePath(void) {
 	return "/system/lib/egl/libGLES_android.so";
     }
 
-    ALOGD("no EGL override found");
-    return 0;
+    ALOGD("no EGL override found, default libGLES_mesa.so");
+    return "/system/lib/egl/libGLES_mesa.so";
 }
 
 // ----------------------------------------------------------------------------
